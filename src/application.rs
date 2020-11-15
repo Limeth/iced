@@ -1,6 +1,12 @@
 use crate::window;
 use crate::{Color, Command, Element, Executor, Settings, Subscription};
 
+#[cfg(not(target_arch = "wasm32"))]
+use iced_winit::winit::{
+    event::Event,
+    event_loop::{ControlFlow, EventLoopWindowTarget},
+};
+
 /// An interactive cross-platform application.
 ///
 /// This trait is the main entrypoint of Iced. Once implemented, you can run
@@ -238,6 +244,51 @@ pub trait Application: Sized {
             <Instance<Self> as iced_web::Application>::run(settings.flags);
 
             Ok(())
+        }
+    }
+
+    /// Runs the [`Application`].
+    ///
+    /// On native platforms, this method will take control of the current thread
+    /// and __will NOT return__ unless there is an [`Error`] during startup.
+    ///
+    /// It should probably be that last thing you call in your `main` function.
+    ///
+    /// [`Application`]: trait.Application.html
+    /// [`Error`]: enum.Error.html
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run_with_event_handler(
+        settings: Settings<Self::Flags>,
+        on_event: Option<
+            Box<
+                dyn FnMut(
+                        Event<'_, ()>,
+                        &EventLoopWindowTarget<Self::Message>,
+                        &mut ControlFlow,
+                    ) + 'static,
+            >,
+        >,
+    ) -> crate::Result
+    where
+        Self: 'static,
+    {
+        {
+            let renderer_settings = crate::renderer::Settings {
+                default_font: settings.default_font,
+                default_text_size: settings.default_text_size,
+                antialiasing: if settings.antialiasing {
+                    Some(crate::renderer::settings::Antialiasing::MSAAx4)
+                } else {
+                    None
+                },
+                ..crate::renderer::Settings::default()
+            };
+
+            Ok(crate::runtime::application::run_with_event_handler::<
+                Instance<Self>,
+                Self::Executor,
+                crate::renderer::window::Compositor,
+            >(settings.into(), renderer_settings, on_event)?)
         }
     }
 }

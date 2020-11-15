@@ -18,6 +18,9 @@ use iced_native::{Cache, UserInterface};
 
 use std::mem::ManuallyDrop;
 
+use winit::event::Event;
+use winit::event_loop::{EventLoop, EventLoopWindowTarget, ControlFlow};
+
 /// An interactive, native cross-platform application.
 ///
 /// This trait is the main entrypoint of Iced. Once implemented, you can run
@@ -112,6 +115,7 @@ pub trait Application: Program {
     }
 }
 
+
 /// Runs an [`Application`] with an executor, compositor, and the provided
 /// settings.
 ///
@@ -125,9 +129,25 @@ where
     E: Executor + 'static,
     C: window::Compositor<Renderer = A::Renderer> + 'static,
 {
+    run_with_event_handler::<A, E, C>(settings, compositor_settings, None)
+}
+
+/// Runs an [`Application`] with an executor, compositor, and the provided
+/// settings.
+///
+/// [`Application`]: trait.Application.html
+pub fn run_with_event_handler<A, E, C>(
+    settings: Settings<A::Flags>,
+    compositor_settings: C::Settings,
+    mut on_event: Option<Box<dyn FnMut(Event<'_, ()>, &EventLoopWindowTarget<A::Message>, &mut ControlFlow) + 'static>>,
+) -> Result<(), Error>
+where
+    A: Application + 'static,
+    E: Executor + 'static,
+    C: window::Compositor<Renderer = A::Renderer> + 'static,
+{
     use futures::task;
     use futures::Future;
-    use winit::event_loop::EventLoop;
 
     let mut debug = Debug::new();
     debug.startup_started();
@@ -163,6 +183,7 @@ where
         )
         .build(&event_loop)
         .map_err(Error::WindowCreationFailed)?;
+    let window_id = window.id();
 
     let (mut sender, receiver) = mpsc::unbounded();
 
@@ -178,15 +199,33 @@ where
 
     let mut context = task::Context::from_waker(task::noop_waker_ref());
 
-    event_loop.run(move |event, _, control_flow| {
-        use winit::event_loop::ControlFlow;
-
+    event_loop.run(move |event, window_target, control_flow| {
         if let ControlFlow::Exit = control_flow {
             return;
         }
 
         if let Some(event) = event.to_static() {
-            sender.start_send(event).expect("Send event");
+            let (nonuser_event_clone, event) = match event.map_nonuser_event::<()>() {
+                Ok(mapped) => (Some(mapped.clone()), mapped.map_nonuser_event::<A::Message>().unwrap()),
+                Err(original) => (None, original),
+            };
+
+            let event_to_send = match event {
+                Event::WindowEvent {
+                    window_id: event_window_id, event
+                } => if window_id == event_window_id {
+                    Some(Event::WindowEvent {
+                        window_id: event_window_id, event
+                    })
+                } else {
+                    None
+                }
+                event => Some(event),
+            };
+
+            if let Some(event_to_send) = event_to_send {
+                sender.start_send(event_to_send).expect("Send event");
+            }
 
             let poll = instance.as_mut().poll(&mut context);
 
@@ -194,6 +233,10 @@ where
                 task::Poll::Pending => ControlFlow::Wait,
                 task::Poll::Ready(_) => ControlFlow::Exit,
             };
+
+            if let (Some(nonuser_event_clone), Some(on_event)) = (nonuser_event_clone, on_event.as_mut()) {
+                (on_event)(nonuser_event_clone, window_target, control_flow);
+            }
         }
     });
 }
