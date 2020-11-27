@@ -272,24 +272,55 @@ pub trait Application: Sized {
     where
         Self: 'static,
     {
-        {
-            let renderer_settings = crate::renderer::Settings {
-                default_font: settings.default_font,
-                default_text_size: settings.default_text_size,
-                antialiasing: if settings.antialiasing {
-                    Some(crate::renderer::settings::Antialiasing::MSAAx4)
-                } else {
-                    None
-                },
-                ..crate::renderer::Settings::default()
-            };
+        let renderer_settings = crate::renderer::Settings {
+            default_font: settings.default_font,
+            default_text_size: settings.default_text_size,
+            antialiasing: if settings.antialiasing {
+                Some(crate::renderer::settings::Antialiasing::MSAAx4)
+            } else {
+                None
+            },
+            ..crate::renderer::Settings::default()
+        };
 
-            Ok(crate::runtime::application::run_with_event_handler::<
-                Instance<Self>,
-                Self::Executor,
-                crate::renderer::window::Compositor,
-            >(settings.into(), renderer_settings, on_event)?)
-        }
+        Self::run_with_event_handler_and_renderer_settings(
+            settings,
+            renderer_settings,
+            on_event,
+        )
+    }
+
+    /// Runs the [`Application`].
+    ///
+    /// On native platforms, this method will take control of the current thread
+    /// and __will NOT return__ unless there is an [`Error`] during startup.
+    ///
+    /// It should probably be that last thing you call in your `main` function.
+    ///
+    /// [`Application`]: trait.Application.html
+    /// [`Error`]: enum.Error.html
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run_with_event_handler_and_renderer_settings(
+        settings: Settings<Self::Flags>,
+        renderer_settings: crate::renderer::Settings,
+        on_event: Option<
+            Box<
+                dyn FnMut(
+                        Event<'_, ()>,
+                        &EventLoopWindowTarget<Self::Message>,
+                        &mut ControlFlow,
+                    ) + 'static,
+            >,
+        >,
+    ) -> crate::Result
+    where
+        Self: 'static,
+    {
+        Ok(crate::runtime::application::run_with_event_handler::<
+            Instance<Self>,
+            Self::Executor,
+            crate::renderer::window::Compositor,
+        >(settings.into(), renderer_settings, on_event)?)
     }
 }
 

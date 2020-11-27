@@ -1,5 +1,6 @@
 use crate::{Backend, Color, Error, Renderer, Settings, Viewport};
 
+use std::sync::Arc;
 use futures::task::SpawnExt;
 use iced_native::{futures, mouse};
 use raw_window_handle::HasRawWindowHandle;
@@ -8,9 +9,9 @@ use raw_window_handle::HasRawWindowHandle;
 #[allow(missing_debug_implementations)]
 pub struct Compositor {
     settings: Settings,
-    instance: wgpu::Instance,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    instance: Arc<wgpu::Instance>,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     staging_belt: wgpu::util::StagingBelt,
     local_pool: futures::executor::LocalPool,
 }
@@ -25,7 +26,7 @@ impl Compositor {
     /// [`Compositor`]: struct.Compositor.html
     /// [`Settings`]: struct.Settings.html
     pub async fn request(settings: Settings) -> Option<Self> {
-        let instance = wgpu::Instance::new(wgpu::BackendBit::PRIMARY);
+        let instance = settings.instance.clone().unwrap_or_else(|| Arc::new(wgpu::Instance::new(wgpu::BackendBit::PRIMARY)));
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -38,7 +39,10 @@ impl Compositor {
             })
             .await?;
 
-        let (device, queue) = adapter
+        let (device, queue) = if let Some(device_queue) = settings.device_queue.clone() {
+            device_queue
+        } else {
+            let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     features: wgpu::Features::empty(),
@@ -52,6 +56,9 @@ impl Compositor {
             )
             .await
             .ok()?;
+
+            (Arc::new(device), Arc::new(queue))
+        };
 
         let staging_belt = wgpu::util::StagingBelt::new(Self::CHUNK_SIZE);
         let local_pool = futures::executor::LocalPool::new();
@@ -71,7 +78,7 @@ impl Compositor {
     /// [`Compositor`]: struct.Compositor.html
     /// [`Backend`]: struct.Backend.html
     pub fn create_backend(&self) -> Backend {
-        Backend::new(&self.device, self.settings)
+        Backend::new(&self.device, self.settings.clone())
     }
 }
 
